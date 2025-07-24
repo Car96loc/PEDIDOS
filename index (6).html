@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aplicación de Pedidos de Comida</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- React and ReactDOM CDNs -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX transformation in browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Firebase SDKs and Global Variables -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.0.0/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.0.0/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, doc, deleteDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.0.0/firebase-firestore.js";
+
+        // =====================================================================================
+        // IMPORTANTE: Configuración de Firebase
+        // ESTOS VALORES HAN SIDO REEMPLAZADOS CON TU CONFIGURACIÓN PROPORCIONADA
+        // =====================================================================================
+        window.firebaseConfig = {
+            apiKey: "AIzaSyC3J1QvvxxoPzHmyPGMHAaYWMvUw1ZSmHk",
+            authDomain: "app-comida-4613f.firebaseapp.com",
+            projectId: "app-comida-4613f",
+            storageBucket: "app-comida-4613f.firebasestorage.app",
+            messagingSenderId: "217882832793",
+            appId: "1:217882832793:web:73ea29892af026178d2d08"
+        };
+
+        // Si estás usando un entorno que proporciona un token de autenticación inicial, úsalo aquí.
+        // De lo contrario, déjalo como null o una cadena vacía.
+        window.initialAuthToken = null;
+
+        // Define un ID de aplicación para Firestore. Usamos el projectId de tu firebaseConfig.
+        window.appId = window.firebaseConfig.projectId; // Ahora usa el projectId real
+
+        // Número de WhatsApp para el restaurante
+        window.WHATSAPP_NUMBER = '5930962210284';
+
+        // Contraseña de administrador
+        window.ADMIN_PASSWORD = '9999';
+
+        // Inicializar Firebase
+        let app, db, auth;
+        try {
+            app = initializeApp(window.firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            // Asignar a window para que el componente React pueda acceder
+            window.app = app;
+            window.db = db;
+            window.auth = auth;
+
+        } catch (error) {
+            console.error("Error al inicializar Firebase. Asegúrate de que tu firebaseConfig es correcta.", error);
+        }
+
+        // Función para manejar la autenticación inicial
+        async function handleInitialAuth() {
+            if (!auth) { // Si Firebase Auth no se inicializó correctamente
+                console.error("Firebase Auth no está disponible. No se puede realizar la autenticación.");
+                return;
+            }
+
+            // Ya no es necesario el chequeo de "TU_API_KEY" ya que se ha reemplazado.
+            if (window.initialAuthToken) {
+                try {
+                    await signInWithCustomToken(auth, window.initialAuthToken);
+                } catch (error) {
+                    console.error("Error al iniciar sesión con token personalizado:", error);
+                    await signInAnonymously(auth); // Fallback a inicio de sesión anónimo
+                }
+            } else {
+                try {
+                    await signInAnonymously(auth);
+                } catch (error) {
+                    console.error("Error al iniciar sesión de forma anónima:", error);
+                    console.error("Asegúrate de que la autenticación anónima está habilitada en tu proyecto de Firebase.");
+                }
+            }
+        }
+
+        // Llama a la función de autenticación inicial
+        handleInitialAuth();
+
+        // Exportar para que Babel pueda acceder a ellos si es necesario (aunque se accede vía window)
+        window.initializeApp = initializeApp;
+        window.getAuth = getAuth;
+        window.signInAnonymously = signInAnonymously;
+        window.signInWithCustomToken = signInWithCustomToken;
+        window.onAuthStateChanged = onAuthStateChanged;
+        window.getFirestore = getFirestore;
+        window.collection = collection;
+        window.addDoc = addDoc;
+        window.onSnapshot = onSnapshot;
+        window.query = query;
+        window.doc = doc;
+        window.deleteDoc = deleteDoc;
+        window.updateDoc = updateDoc;
+    </script>
+
+    <!-- React Component (using Babel for JSX) -->
+    <script type="text/babel">
+        // El componente React principal
+        const App = () => {
+            // Accede a las variables globales definidas en el script anterior
+            const { db, auth, appId, WHATSAPP_NUMBER, ADMIN_PASSWORD } = window;
+
+            const [userId, setUserId] = React.useState('');
+            const [isAuthReady, setIsAuthReady] = React.useState(false);
+            const [dishes, setDishes] = React.useState([]);
+            const [cart, setCart] = React.useState([]);
+
+            // Admin Panel States
+            const [adminPasswordInput, setAdminPasswordInput] = React.useState('');
+            const [isLoggedInAsAdmin, setIsLoggedInAsAdmin] = React.useState(false); // Controls admin panel visibility
+            const [adminLoginError, setAdminLoginError] = React.useState('');
+
+            const [dishName, setDishName] = React.useState('');
+            const [dishDescription, setDishDescription] = React.useState('');
+            const [dishPrice, setDishPrice] = React.useState('');
+            const [dishImageUrl, setDishImageUrl] = React.useState('');
+            const [editingDish, setEditingDish] = React.useState(null);
+
+            // Set up authentication listener
+            React.useEffect(() => {
+                if (!auth) return; // No intentes configurar el listener si auth no está inicializado
+
+                const unsubscribe = window.onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        setUserId(user.uid);
+                        setIsAuthReady(true);
+                    } else {
+                        console.log("Usuario no autenticado. Intentando inicio de sesión anónimo si no se ha hecho ya.");
+                    }
+                });
+                return () => unsubscribe();
+            }, [auth]); // Dependencia en 'auth'
+
+            // Fetch dishes when db and auth are ready
+            React.useEffect(() => {
+                if (db && isAuthReady) {
+                    const dishesCollectionRef = window.collection(db, `artifacts/${appId}/public/data/dishes`);
+                    const q = window.query(dishesCollectionRef);
+
+                    const unsubscribe = window.onSnapshot(q, (snapshot) => {
+                        const fetchedDishes = snapshot.docs.map(doc => ({
+                            id: doc.id,
+                            ...doc.data()
+                        }));
+                        setDishes(fetchedDishes);
+                    }, (error) => {
+                        console.error("Error al obtener los platos:", error);
+                    });
+
+                    return () => unsubscribe();
+                }
+            }, [db, isAuthReady, appId]); // Dependencias en 'db', 'isAuthReady', 'appId'
+
+            // Admin Login Function
+            const handleAdminLogin = () => {
+                if (adminPasswordInput === ADMIN_PASSWORD) {
+                    setIsLoggedInAsAdmin(true);
+                    setAdminLoginError('');
+                } else {
+                    setAdminLoginError('Contraseña incorrecta.');
+                }
+                setAdminPasswordInput(''); // Clear password input
+            };
+
+            // Admin Logout Function
+            const handleAdminLogout = () => {
+                setIsLoggedInAsAdmin(false);
+                setAdminLoginError('');
+            };
+
+            // Admin Functions (only callable if isLoggedInAsAdmin is true)
+            const addOrUpdateDish = async () => {
+                if (!dishName || !dishDescription || !dishPrice || !dishImageUrl) {
+                    alert('Por favor, rellena todos los campos del plato.');
+                    return;
+                }
+                const parsedPrice = parseFloat(dishPrice);
+                if (isNaN(parsedPrice) || parsedPrice <= 0) {
+                    alert('Por favor, introduce un precio válido y mayor que cero.');
+                    return;
+                }
+
+                if (db && isLoggedInAsAdmin) { // Check for admin login
+                    try {
+                        const dishesCollectionRef = window.collection(db, `artifacts/${appId}/public/data/dishes`);
+                        if (editingDish) {
+                            const dishDocRef = window.doc(db, `artifacts/${appId}/public/data/dishes`, editingDish.id);
+                            await window.updateDoc(dishDocRef, {
+                                name: dishName,
+                                description: dishDescription,
+                                price: parsedPrice,
+                                imageUrl: dishImageUrl,
+                                updatedAt: Date.now()
+                            });
+                            setEditingDish(null);
+                        } else {
+                            await window.addDoc(dishesCollectionRef, {
+                                name: dishName,
+                                description: dishDescription,
+                                price: parsedPrice,
+                                imageUrl: dishImageUrl,
+                                createdAt: Date.now()
+                            });
+                        }
+                        setDishName('');
+                        setDishDescription('');
+                        setDishPrice('');
+                        setDishImageUrl('');
+                    } catch (e) {
+                        console.error("Error al añadir/actualizar documento: ", e);
+                    }
+                } else {
+                    alert('No tienes permisos para realizar esta acción.');
+                }
+            };
+
+            const startEditDish = (dish) => {
+                if (isLoggedInAsAdmin) { // Check for admin login
+                    setEditingDish(dish);
+                    setDishName(dish.name);
+                    setDishDescription(dish.description);
+                    setDishPrice(dish.price.toString());
+                    setDishImageUrl(dish.imageUrl);
+                } else {
+                    alert('No tienes permisos para realizar esta acción.');
+                }
+            };
+
+            const deleteDish = async (id) => {
+                if (db && isLoggedInAsAdmin) { // Check for admin login
+                    const confirmDelete = window.confirm('¿Estás seguro de que quieres eliminar este plato?');
+                    if (confirmDelete) {
+                        try {
+                            const dishDocRef = window.doc(db, `artifacts/${appId}/public/data/dishes`, id);
+                            await window.deleteDoc(dishDocRef);
+                        } catch (e) {
+                            console.error("Error al eliminar documento: ", e);
+                        }
+                    }
+                } else {
+                    alert('No tienes permisos para realizar esta acción.');
+                }
+            };
+
+            // Client Functions
+            const addToCart = (dish) => {
+                setCart(prevCart => {
+                    const existingItem = prevCart.find(item => item.id === dish.id);
+                    if (existingItem) {
+                        return prevCart.map(item =>
+                            item.id === dish.id ? { ...item, quantity: item.quantity + 1 } : item
+                        );
+                    } else {
+                        return [...prevCart, { ...dish, quantity: 1 }];
+                    }
+                });
+            };
+
+            const removeFromCart = (dishId) => {
+                setCart(prevCart => {
+                    const existingItem = prevCart.find(item => item.id === dishId);
+                    if (existingItem && existingItem.quantity > 1) {
+                        return prevCart.map(item =>
+                            item.id === dishId ? { ...item, quantity: item.quantity - 1 } : item
+                        );
+                    } else {
+                        return prevCart.filter(item => item.id !== dishId);
+                    }
+                });
+            };
+
+            const calculateCartTotal = () => {
+                return cart.reduce((total, item) => total + (item.price * item.quantity), 0);
+            };
+
+            const sendOrderToWhatsApp = () => {
+                if (cart.length === 0) {
+                    alert('Tu carrito está vacío. Por favor, añade algunos platos antes de ordenar.');
+                    return;
+                }
+
+                let message = "¡Hola! Me gustaría hacer un pedido:\n\n";
+                cart.forEach((item, index) => {
+                    message += `${index + 1}. ${item.name} (x${item.quantity}) - $${(item.price * item.quantity).toFixed(2)}\n`;
+                });
+                message += `\nTotal: $${calculateCartTotal().toFixed(2)}`;
+                message += `\n\nID de Usuario: ${userId}`; // Include user ID for tracking
+
+                const whatsappUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
+                window.open(whatsappUrl, '_blank');
+                setCart([]); // Clear cart after sending order
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-green-100 to-teal-200 p-4 font-sans flex items-center justify-center">
+                    <div className="bg-white p-6 rounded-xl shadow-2xl w-full max-w-4xl">
+                        <h1 className="text-4xl font-extrabold text-center text-teal-800 mb-8">
+                            Aplicación de Pedidos de Comida
+                        </h1>
+
+                        {/* User ID Display */}
+                        {userId && (
+                            <div className="text-center text-sm text-gray-600 mb-4 p-2 bg-gray-100 rounded-lg">
+                                <p>ID de Usuario: <span className="font-mono text-teal-700 break-words">{userId}</span></p>
+                            </div>
+                        )}
+
+                        {!isLoggedInAsAdmin && (
+                            <div className="admin-login-section mb-8 p-6 bg-blue-50 rounded-lg shadow-inner text-center">
+                                <h2 className="text-2xl font-bold text-blue-700 mb-4">Ingresar como Administrador</h2>
+                                <input
+                                    type="password"
+                                    placeholder="Contraseña de Administrador"
+                                    className="p-3 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-400 focus:border-transparent transition duration-200 w-full md:w-1/2 mb-4"
+                                    value={adminPasswordInput}
+                                    onChange={(e) => setAdminPasswordInput(e.target.value)}
+                                    onKeyPress={(e) => { if (e.key === 'Enter') handleAdminLogin(); }}
+                                />
+                                <button
+                                    onClick={handleAdminLogin}
+                                    className="w-full md:w-1/2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105"
+                                >
+                                    Ingresar
+                                </button>
+                                {adminLoginError && (
+                                    <p className="text-red-500 mt-2">{adminLoginError}</p>
+                                )}
+                            </div>
+                        )}
+
+                        {isLoggedInAsAdmin ? (
+                            // Admin Panel View
+                            <div className="admin-panel">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-2xl font-bold text-teal-700">Panel de Administración</h2>
+                                    <button
+                                        onClick={handleAdminLogout}
+                                        className="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300"
+                                    >
+                                        Cerrar Sesión (Admin)
+                                    </button>
+                                </div>
+                                <div className="mb-8 p-6 bg-teal-50 rounded-lg shadow-inner">
+                                    <h3 className="text-2xl font-bold text-teal-700 mb-4">
+                                        {editingDish ? 'Editar Plato' : 'Añadir Nuevo Plato'}
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                        <input
+                                            type="text"
+                                            placeholder="Nombre del Plato"
+                                            className="p-3 border border-teal-300 rounded-lg focus:ring-2 focus:ring-teal-400 focus:border-transparent transition duration-200"
+                                            value={dishName}
+                                            onChange={(e) => setDishName(e.target.value)}
+                                        />
+                                        <input
+                                            type="text"
+                                            placeholder="Descripción del Plato"
+                                            className="p-3 border border-teal-300 rounded-lg focus:ring-2 focus:ring-teal-400 focus:border-transparent transition duration-200"
+                                            value={dishDescription}
+                                            onChange={(e) => setDishDescription(e.target.value)}
+                                        />
+                                        <input
+                                            type="number"
+                                            placeholder="Precio"
+                                            className="p-3 border border-teal-300 rounded-lg focus:ring-2 focus:ring-teal-400 focus:border-transparent transition duration-200"
+                                            value={dishPrice}
+                                            onChange={(e) => setDishPrice(e.target.value)}
+                                        />
+                                        <input
+                                            type="text"
+                                            placeholder="URL de la Imagen"
+                                            className="p-3 border border-teal-300 rounded-lg focus:ring-2 focus:ring-teal-400 focus:border-transparent transition duration-200"
+                                            value={dishImageUrl}
+                                            onChange={(e) => setDishImageUrl(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={addOrUpdateDish}
+                                            className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105"
+                                        >
+                                            {editingDish ? 'Actualizar Plato' : 'Añadir Plato'}
+                                        </button>
+                                        {editingDish && (
+                                            <button
+                                                onClick={() => {
+                                                    setEditingDish(null);
+                                                    setDishName('');
+                                                    setDishDescription('');
+                                                    setDishPrice('');
+                                                    setDishImageUrl('');
+                                                }}
+                                                className="w-full bg-gray-500 hover:bg-gray-600 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105"
+                                            >
+                                                Cancelar Edición
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <h2 className="text-2xl font-bold text-teal-700 mb-4">Platos Disponibles</h2>
+                                {dishes.length === 0 ? (
+                                    <p className="text-center text-gray-500">No hay platos registrados. ¡Añade algunos!</p>
+                                ) : (
+                                    <ul className="space-y-4">
+                                        {dishes.map((dish) => (
+                                            <li
+                                                key={dish.id}
+                                                className="flex flex-col sm:flex-row items-center bg-white p-4 rounded-lg shadow-md border border-gray-200"
+                                            >
+                                                <img
+                                                    src={dish.imageUrl}
+                                                    alt={dish.name}
+                                                    className="w-24 h-24 object-cover rounded-lg mr-4 mb-4 sm:mb-0"
+                                                    onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/96x96/E0F2F1/00796B?text=Plato"; }}
+                                                />
+                                                <div className="flex-grow text-center sm:text-left">
+                                                    <p className="text-lg font-semibold text-gray-800">{dish.name}</p>
+                                                    <p className="text-sm text-gray-600">{dish.description}</p>
+                                                    <p className="text-md font-bold text-teal-600">${dish.price.toFixed(2)}</p>
+                                                </div>
+                                                <div className="flex space-x-2 mt-4 sm:mt-0">
+                                                    <button
+                                                        onClick={() => startEditDish(dish)}
+                                                        className="p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition duration-200"
+                                                        title="Editar"
+                                                    >
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                                            <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                                                        </svg>
+                                                    </button>
+                                                    <button
+                                                        onClick={() => deleteDish(dish.id)}
+                                                        className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition duration-200"
+                                                        title="Eliminar"
+                                                    >
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                                                        </svg>
+                                                    </button>
+                                                </div>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        ) : (
+                            // Client View
+                            <div className="client-view">
+                                <h2 className="text-2xl font-bold text-teal-700 mb-4">Nuestro Menú</h2>
+                                {dishes.length === 0 ? (
+                                    <p className="text-center text-gray-500">No hay platos disponibles en este momento.</p>
+                                ) : (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+                                        {dishes.map((dish) => (
+                                            <div
+                                                key={dish.id}
+                                                className="bg-white p-4 rounded-lg shadow-md border border-gray-200 flex flex-col items-center text-center"
+                                            >
+                                                <img
+                                                    src={dish.imageUrl}
+                                                    alt={dish.name}
+                                                    className="w-32 h-32 object-cover rounded-lg mb-4"
+                                                    onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/128x128/E0F2F1/00796B?text=Plato"; }}
+                                                />
+                                                <h3 className="text-xl font-semibold text-gray-800 mb-1">{dish.name}</h3>
+                                                <p className="text-sm text-gray-600 mb-2 flex-grow">{dish.description}</p>
+                                                <p className="text-lg font-bold text-teal-600 mb-4">${dish.price.toFixed(2)}</p>
+                                                <button
+                                                    onClick={() => addToCart(dish)}
+                                                    className="w-full bg-teal-500 hover:bg-teal-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 transform hover:scale-105"
+                                                >
+                                                    Añadir al Carrito
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                <div className="cart-summary p-6 bg-blue-50 rounded-lg shadow-inner mt-8">
+                                    <h2 className="text-2xl font-bold text-blue-700 mb-4">Tu Pedido</h2>
+                                    {cart.length === 0 ? (
+                                        <p className="text-center text-gray-500">El carrito está vacío.</p>
+                                    ) : (
+                                        <>
+                                            <ul className="space-y-2 mb-4">
+                                                {cart.map(item => (
+                                                    <li key={item.id} className="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm">
+                                                        <div className="flex-grow">
+                                                            <span className="font-semibold text-gray-800">{item.name}</span> (x{item.quantity})
+                                                        </div>
+                                                        <div className="flex items-center space-x-2">
+                                                            <span className="font-bold text-blue-600">${(item.price * item.quantity).toFixed(2)}</span>
+                                                            <button
+                                                                onClick={() => removeFromCart(item.id)}
+                                                                className="p-1 rounded-full bg-red-400 text-white hover:bg-red-500 transition duration-200 text-xs"
+                                                                title="Quitar uno"
+                                                            >
+                                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 000 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+                                                                </svg>
+                                                            </button>
+                                                        </div>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                            <div className="text-right text-2xl font-bold text-blue-800 mb-4">
+                                                Total del Pedido: ${calculateCartTotal().toFixed(2)}
+                                            </div>
+                                            <button
+                                                onClick={sendOrderToWhatsApp}
+                                                className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 flex items-center justify-center space-x-2"
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
+                                                    <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.911C.11 5.787 5.734.059 12.001.059c3.21 0 6.229 1.249 8.487 3.506 2.257 2.257 3.506 5.276 3.506 8.486s-1.249 6.229-3.506 8.486c-2.257 2.257-5.276 3.506-8.487 3.506-.913 0-1.81-.224-2.65-.484l-6.214 1.692zm6.597-3.807c-.49-.148-1.44-.296-2.09-.434l-3.947 1.071 1.09-3.818c-.3-.507-.597-1.013-.872-1.528-.275-.515-.522-1.03-.74-1.554-.218-.524-.411-1.05-.579-1.584-.168-.534-.298-1.07-.39-1.611-.092-.541-.14-1.085-.14-1.631 0-5.289 4.288-9.577 9.577-9.577 5.289 0 9.577 4.288 9.577 9.577s-4.288 9.577-9.577 9.577c-1.666 0-3.332-.42-4.818-1.23zm6.597-2.31c2.81 0 5.107-2.296 5.107-5.106s-2.297-5.107-5.107-5.107-5.107 2.297-5.107 5.107 2.297 5.106 5.107 5.106zm-1.597-6.106c.38-.38 1.002-.38 1.382 0l1.597 1.597c.38.38.38 1.002 0 1.382l-2.98 2.98c-.38.38-1.002.38-1.382 0l-1.597-1.597c-.38-.38-.38-1.002 0-1.382l2.98-2.98z" />
+                                                </svg>
+                                                Enviar Pedido por WhatsApp
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // Renderiza el componente React en el DOM
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>
